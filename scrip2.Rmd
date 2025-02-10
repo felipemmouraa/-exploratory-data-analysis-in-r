@@ -1,0 +1,622 @@
+---
+title: "Exploratory Analysis of Quality Failures in Volkswagen Production"
+author: "Felipe Moura"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+
+# Load tidyverse for data manipulation and ggplot2 for visualization
+library(tidyverse)
+# For the correlation plot
+library(corrplot)
+# For styling the plots
+library(patchwork)
+library(dplyr)
+library(ggplot2)
+```
+# 1. Carregamento e Preparação dos Dados
+
+## a) Carregamento dos dados
+
+```{r}
+inteli_status <- read.csv("InteliStatus.csv", stringsAsFactors = FALSE)
+inteli_resultados <- read.csv("InteliResultados.csv", stringsAsFactors = FALSE)
+inteli_falhas <- read.csv("InteliFalhas.csv", stringsAsFactors = FALSE)
+inteli_veiculo <- read.csv("InteliVeiculo.csv", stringsAsFactors = FALSE)
+```
+
+## b) Visualização das primeiras linhas
+```{r}
+head(inteli_status)
+head(inteli_resultados)
+head(inteli_falhas)
+head(inteli_veiculo)
+```
+
+## c) Verificação da estrutura dos dados 
+```{r}
+str(inteli_status)
+str(inteli_resultados)
+str(inteli_falhas)
+str(inteli_veiculo)
+```
+```{r}
+
+inteli_falhas
+```
+```{r}
+
+inteli_resultados
+```
+```{r}
+
+inteli_status
+```
+
+# 2. Resumo Estatístico e Descrição dos Dados 
+
+## a) Resumo estatístico
+```{r}
+summary(inteli_status)
+summary(inteli_resultados)
+summary(inteli_falhas)
+summary(inteli_veiculo)
+```
+
+## b) Descrição das variáveis 
+
+1. InteliStatus.csv
+
+Campo Descrição
+- 'ID' Identificação do Veículo (PK)
+- 'STATUS' Status de produção
+- 'STATUS_DATA' Data da Associação do status
+
+Nesta tabela estarão contidos Status, data e hora que registra a
+passagem do veículo em posições do processo.
+Para extração do tempo os status estarão listados nesta tabela. (Pode
+existir muito poucas situações que o veículo não recebei o status)
+
+2. InteliResultados
+
+Campo Descrição
+'ID' Identificação do Veículo (CHAVE ESTRANGEIRA)
+'RESULT_ID' Código do resultado
+'RESULT_DESCRIPTION' Descrição do resultado
+'CAPTURE_TIME' Data e hora do recebimento
+'STATUS' Status OK ou NOK
+
+Nesta tabela estarão contidas todos resultados
+coletados no veículo no decorrer de todo processo
+através de torquimetros e outros equipamentos
+
+Campo Descrição
+- 'ID' Identificação do Veículo (CHAVE ESTRANGEIRA)
+- 'RESULT_ID' Código do resultado
+- 'RESULT_DESCRIPTION' Descrição do resultado
+- 'CAPTURE_TIME' Data e hora do recebimento
+- 'STATUS' Status OK ou NOK
+
+- Cada veículo recebe o resultado da operação de acordo com a sua configuração:
+Exemplo: Apenas veículos com ar condicionado receberão o resultado da carga de gás.
+- Cada resultado de cada veículo possui o histórico de testes, ou seja se o teste foi
+reprovado na primeira tentativa e na segunda recebeu OK haverão 2 registros.
+Atenção: O fato de ter tido alguma reprova no resultado deve ser considerado como um
+fator de causa da falha.
+
+3. InteliFalhas.csv
+
+Campo Descrição
+- 'ID' Identificação do Veículo (CHAVE ESTRANGEIRA)
+- 'DATA DETECCAO' Data detecção da falha
+- 'PONTO' ZP5, ZP5A, Processo, KA ZP6, ZP6, ZP7, Rodagem, Água, DKA ZP8
+- 'LOC_ID' Código da peça com falha
+- 'LOC' Descrição peça com falha
+- 'POS_ID' Código da posição com falha
+- 'POS' Descrição da posição
+- 'TYPE_ID' Código do tipo da falha
+- 'TYPE_TEXT' Descrição do tipo da falha
+- 'VIEW_ID' Código da imagem da peça (Cartesiano)
+- 'COLUNA' Coluna da coordenada da peça (Cartesiano) de A até I
+- 'LINHA' Linha da coordenada da peça (Cartesiano) de 1 até 6
+
+Nesta tabela estarão contidas todas as falhas
+detectadas no veículo no decorrer de todo processo
+
+4. InteliVeiculo.csv
+
+Campo Descição
+'ID' Identificação do Veículo (PK)
+'MODELL' Modelo / Motorização
+'FARBAU' Cor Externa
+'FARBIN' Cor Interna
+'ZIEL_LAND' Pais destino
+'PR' Configuração completa (Estrutura)
+
+Este campo possui uma grande string contendo as diversas configurações de acabamento do veículo
+Exemplo: MOT:M7B -> Onde MOT é a família motor e M7B é o motor que deve ser montado no veículo
+O Padrão na grande maioria será:
+
+FFF: CCC
+Família Configuração
+
+Raras exceções poderá ter mais do que uma configuração na família
+
+Campo Modell
+Este campo possui as informações do modelo do carro em detalhes (BZ3 polo PZ
+T M A I M C
+B Z 3 2 K 3
+
+CAMBIO
+MOTORIZAÇÃO
+VERSÃO
+
+MODELO
+
+BZ3 Polo PA (modelo mais completo)
+R11 Polo Track (modelo de entrada)
+
+# Funções para Análise Exploratória de Dados
+
+```{r}
+
+# --- FUNÇÃO PARA ANÁLISE UNIVARIADA ---
+plot_univariate <- function(df, col) {
+  # Gera gráficos de distribuição para uma coluna do data frame.
+  # Se a coluna for numérica, cria histograma, densidade e boxplot.
+  # Se não, cria um gráfico de barras (contagem de categorias).
+  if (is.numeric(df[[col]])) {
+    p_hist <- ggplot(df, aes_string(x = col)) +
+      geom_histogram(bins = 30, fill = "blue", alpha = 0.6) +
+      labs(title = paste("Histogram of", col), x = col, y = "Frequency")
+    
+    p_density <- ggplot(df, aes_string(x = col)) +
+      geom_density(fill = "green", alpha = 0.6) +
+      labs(title = paste("Density Plot of", col), x = col, y = "Density")
+    
+    p_box <- ggplot(df, aes_string(y = col)) +
+      geom_boxplot(fill = "orange", alpha = 0.6) +
+      labs(title = paste("Boxplot of", col), y = col)
+    
+    # Combina os três gráficos em uma única linha
+    combined_plot <- p_hist + p_density + p_box + plot_layout(ncol = 3)
+    return(combined_plot)
+  } else {
+    p_bar <- ggplot(df, aes_string(x = col)) +
+      geom_bar(fill = "purple", alpha = 0.6) +
+      labs(title = paste("Bar Plot of", col), x = col, y = "Count") +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    return(p_bar)
+  }
+}
+
+# --- FUNÇÃO PARA IDENTIFICAÇÃO DE OUTLIERS ---
+identify_outliers <- function(df, col) {
+  # Identifica outliers em uma coluna numérica usando o método IQR.
+  if (!is.numeric(df[[col]])) {
+    stop("Column is not numeric. Outlier detection requires numeric data.")
+  }
+  Q1 <- quantile(df[[col]], 0.25, na.rm = TRUE)
+  Q3 <- quantile(df[[col]], 0.75, na.rm = TRUE)
+  IQR_val <- IQR(df[[col]], na.rm = TRUE)
+  lower_bound <- Q1 - 1.5 * IQR_val
+  upper_bound <- Q3 + 1.5 * IQR_val
+  outliers <- df %>% filter((.data[[col]] < lower_bound) | (.data[[col]] > upper_bound))
+  return(outliers)
+}
+
+# --- FUNÇÃO PARA ANÁLISE BIVARIADA ---
+plot_bivariate <- function(df, col_x, col_y) {
+  # Cria um gráfico para explorar a relação entre duas variáveis.
+  # Se ambas são numéricas, gera scatter plot;
+  # Se uma é numérica e a outra categórica, gera boxplot;
+  # Se ambas são categóricas, gera um gráfico de barras.
+  is_x_numeric <- is.numeric(df[[col_x]])
+  is_y_numeric <- is.numeric(df[[col_y]])
+  
+  if (is_x_numeric & is_y_numeric) {
+    p <- ggplot(df, aes_string(x = col_x, y = col_y)) +
+      geom_point(alpha = 0.6) +
+      labs(title = paste("Scatter Plot:", col_x, "vs", col_y), x = col_x, y = col_y)
+    return(p)
+  } else if (is_x_numeric & !is_y_numeric) {
+    p <- ggplot(df, aes_string(x = col_y, y = col_x)) +
+      geom_boxplot(fill = "skyblue", alpha = 0.6) +
+      labs(title = paste("Boxplot of", col_x, "by", col_y), x = col_y, y = col_x) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    return(p)
+  } else if (!is_x_numeric & is_y_numeric) {
+    p <- ggplot(df, aes_string(x = col_x, y = col_y)) +
+      geom_boxplot(fill = "skyblue", alpha = 0.6) +
+      labs(title = paste("Boxplot of", col_y, "by", col_x), x = col_x, y = col_y) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    return(p)
+  } else {
+    p <- ggplot(df, aes_string(x = col_x, fill = col_y)) +
+      geom_bar(position = "dodge") +
+      labs(title = paste("Bar Plot:", col_x, "by", col_y), x = col_x, y = "Count") +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    return(p)
+  }
+}
+
+# --- FUNÇÃO PARA MATRIZ DE CORRELAÇÃO ---
+plot_correlation_matrix <- function(df, numeric_cols = NULL) {
+  # Plota a matriz de correlação para colunas numéricas.
+  if (is.null(numeric_cols)) {
+    numeric_df <- df %>% select(where(is.numeric))
+  } else {
+    numeric_df <- df %>% select(all_of(numeric_cols))
+  }
+  
+  if (ncol(numeric_df) < 2) {
+    stop("Not enough numeric columns to compute a correlation matrix.")
+  }
+  
+  cor_matrix <- cor(numeric_df, use = "complete.obs")
+  corrplot(cor_matrix, method = "color", type = "upper", tl.cex = 0.8, addCoef.col = "black")
+}
+
+# --- FUNÇÕES PARA ANÁLISE MULTIVARIADA (PCA) ---
+perform_pca <- function(df, numeric_cols = NULL, scale_data = TRUE) {
+  # Realiza PCA utilizando as colunas numéricas especificadas.
+  if (is.null(numeric_cols)) {
+    numeric_df <- df %>% select(where(is.numeric))
+  } else {
+    numeric_df <- df %>% select(all_of(numeric_cols))
+  }
+  
+  if (ncol(numeric_df) < 2) {
+    stop("Need at least two numeric columns for PCA.")
+  }
+  
+  pca_result <- prcomp(numeric_df, center = TRUE, scale. = scale_data)
+  return(pca_result)
+}
+
+plot_pca_variance <- function(pca_result) {
+  # Plota a variância explicada por cada componente principal.
+  var_explained <- (pca_result$sdev)^2 / sum(pca_result$sdev^2)
+  df_variance <- data.frame(PC = factor(paste0("PC", seq_along(var_explained)), 
+                                          levels = paste0("PC", seq_along(var_explained))),
+                            Variance = var_explained)
+  
+  p <- ggplot(df_variance, aes(x = PC, y = Variance)) +
+    geom_bar(stat = "identity", fill = "steelblue") +
+    labs(title = "Explained Variance by Principal Components",
+         x = "Principal Components", y = "Proportion of Variance") +
+    ylim(0, 1)
+  
+  return(p)
+}
+
+plot_pca_results <- function(pca_result, df, target = NULL) {
+  # Plota um biplot (PC1 vs PC2) do PCA.
+  scores <- as.data.frame(pca_result$x)
+  if (!is.null(target) && target %in% names(df)) {
+    scores[[target]] <- df[[target]]
+    p <- ggplot(scores, aes_string(x = "PC1", y = "PC2", color = target)) +
+      geom_point(size = 2, alpha = 0.7) +
+      labs(title = "PCA Biplot: PC1 vs PC2", x = "Principal Component 1", y = "Principal Component 2")
+  } else {
+    p <- ggplot(scores, aes(x = PC1, y = PC2)) +
+      geom_point(size = 2, alpha = 0.7) +
+      labs(title = "PCA Biplot: PC1 vs PC2", x = "Principal Component 1", y = "Principal Component 2")
+  }
+  return(p)
+  
+}
+```
+
+
+```{r}
+
+# Função para calcular distribuição de valores categóricos em um dataframe
+resumo_categorico <- function(df, coluna) {
+  # Verifica se a coluna existe no dataframe
+  if (!coluna %in% colnames(df)) {
+    stop("Erro: A coluna especificada não existe no dataframe.")
+  }
+  
+  # Conta as ocorrências de cada categoria
+  tabela <- as.data.frame(table(df[[coluna]]))
+  
+  # Renomeia as colunas
+  colnames(tabela) <- c("CATEGORIA", "QUANTIDADE")
+  
+  # Calcula o percentual sobre o total
+  tabela$`PERCENTUAL SOBRE O TOTAL` <- round((tabela$QUANTIDADE / sum(tabela$QUANTIDADE)) * 100, 2)
+  
+  # Ordena a tabela em ordem decrescente pela quantidade
+  tabela <- tabela[order(-tabela$QUANTIDADE), ]
+  
+  # Retorna a tabela
+  return(tabela)
+  print(resultado)
+}
+
+```
+
+# 3. Análise Univariada
+```{r}
+# Exemplo: análise univariada na tabela inteli_status
+# A variável STATUS é categórica
+plot_univariate(inteli_status, "STATUS")
+
+# Exemplo: Análise univariada na tabela inteli_veiculo
+# A variável MODELL (modelo do veículo) é categórica
+plot_univariate(inteli_veiculo, "MODELL")
+
+# Exemplo: Na tabela inteli_falhas, a variável LINHA é categórica (coordenada de 1 até 6)
+plot_univariate(inteli_falhas, "LINHA")
+
+plot_univariate(inteli_falhas, "PONTO")
+
+plot_univariate(inteli_resultados, "RESULT_ID")
+
+plot_univariate(inteli_resultados, "STATUS")
+
+plot_univariate(inteli_resultados, "RESULT_DESCRIPTION")
+
+# Se houver uma variável numérica, por exemplo, LOC_ID (código da peça com falha) em inteli_falhas:
+if (is.numeric(inteli_falhas$LOC_ID)) {
+  plot_univariate(inteli_falhas, "LOC_ID")
+  
+  # Identificação de outliers na variável LOC_ID
+  outliers_loc_id <- identify_outliers(inteli_falhas, "LOC_ID")
+  print("Outliers na variável LOC_ID:")
+  print(outliers_loc_id)
+}
+```
+```{r}
+resultado <- resumo_categorico(inteli_resultados, "RESULT_ID")
+resultado
+```
+```{r}
+resultado <- resumo_categorico(inteli_status, "STATUS")
+resultado
+```
+```{r}
+resultado <- resumo_categorico(inteli_falhas, "PONTO")
+resultado
+```
+```{r}
+resultado <- resumo_categorico(inteli_falhas, "LOC")
+resultado
+```
+```{r}
+resultado <- resumo_categorico(inteli_falhas, "TYPE_TEXT")
+resultado
+```
+```{r}
+resultado <- resumo_categorico(inteli_resultados, "RESULT_DESCRIPTION")
+resultado
+resultado <- resumo_categorico(inteli_resultados, "STATUS")
+resultado
+```
+```{r}
+resultado <- resumo_categorico(inteli_resultados, "RESULT_ID")
+resultado
+```
+# 4. Análise Bivariada
+
+```{r}
+
+gerar_grafico_calor <- function(df, coluna_x, coluna_y) {
+  # Contagem de ocorrências por colunas especificadas
+  df_agrupado <- df %>%
+    group_by(across(all_of(c(coluna_x, coluna_y)))) %>%
+    summarise(Quantidade = n(), .groups = 'drop') %>%
+    arrange(desc(Quantidade))
+
+  # Gerar gráfico de calor
+  ggplot(df_agrupado, aes_string(x = coluna_x, y = coluna_y, fill = "Quantidade")) +
+    geom_tile() +
+    scale_fill_gradient(low = "white", high = "red") +
+    labs(title = paste("Distribuição por", coluna_x, "e", coluna_y), 
+         x = coluna_x, 
+         y = coluna_y) +
+    theme_minimal()
+}
+
+# Exemplo de uso:
+# gerar_grafico_calor(inteli_falhas, "PONTO", "TYPE_TEXT")
+```
+
+
+
+```{r}
+# Função para agrupar em 'Outros' e facilitar a visualização
+agrupar_categorias <- function(df, coluna, percentual = 0.01) {
+  # Verifica se a coluna existe no dataframe
+  if (!(coluna %in% colnames(df))) {
+    stop("Erro: A coluna especificada não existe no dataframe.")
+  }
+  
+  # Calcula o limite mínimo com base no percentual
+  limite <- percentual * nrow(df)
+  
+  # Contagem das ocorrências por categoria
+  contagens <- df %>%
+    count(.data[[coluna]], sort = TRUE) 
+  
+  # Identifica categorias que aparecem com frequência suficiente
+  categorias_validas <- contagens %>%
+    filter(n > limite) %>%
+    pull(.data[[coluna]])
+  
+  # Criar uma nova coluna com categorias ajustadas
+  df[[paste0(coluna, "_AJUSTADO")]] <- ifelse(df[[coluna]] %in% categorias_validas, df[[coluna]], "OUTROS")
+  
+  return(df)
+}
+
+# Exemplo de uso na tabela InteliFalhas para a coluna 'LOC'
+# inteli_falhas <- agrupar_categorias(inteli_falhas, "LOC", percentual = 0.01)
+
+
+# Função para filtrar df nas tops categorias
+filtrar_top_categorias <- function(df, coluna, top_n = 10) {
+  # Verifica se a coluna existe no dataframe
+  if (!(coluna %in% colnames(df))) {
+    stop("Erro: A coluna especificada não existe no dataframe.")
+  }
+  
+  # Contagem das categorias e seleção dos Top N
+  top_categorias <- df %>%
+    count(.data[[coluna]], sort = TRUE) %>%
+    top_n(top_n, n) %>%
+    pull(.data[[coluna]])
+  
+  # Filtra o dataframe mantendo apenas os Top N
+  df_filtrado <- df %>% filter(.data[[coluna]] %in% top_categorias)
+  
+  return(df_filtrado)
+}
+
+# Exemplo de uso na tabela InteliFalhas para a coluna 'LOC'
+# inteli_falhas_filtrado <- filtrar_top_categorias(inteli_falhas, "LOC", top_n = 10)
+
+
+```
+
+```{r}
+inteli_falhas_filtrado <- filtrar_top_categorias(inteli_falhas, "LOC", top_n = 10)
+gerar_grafico_calor(inteli_falhas_filtrado, "PONTO", "LOC")
+
+inteli_resultados_filtrado <- filtrar_top_categorias(inteli_resultados, "RESULT_DESCRIPTION", top_n = 10)
+gerar_grafico_calor(inteli_resultados_filtrado, "STATUS", "RESULT_DESCRIPTION")
+
+```
+
+```{r}
+# Exemplo: Relação entre PONTO e TYPE_ID em inteli_falhas (ambas categóricas)
+plot_bivariate(inteli_falhas, "PONTO", "LOC")
+plot_bivariate(inteli_falhas_filtrado, "PONTO", "LOC")
+
+plot_bivariate(inteli_falhas, "LOC_ID", "POS_ID")
+
+# Exemplo: Se LOC_ID e POS_ID forem numéricas, podemos explorar sua relação
+if (is.numeric(inteli_falhas$LOC_ID) && is.numeric(inteli_falhas$POS_ID)) {
+  plot_bivariate(inteli_falhas, "LOC_ID", "POS_ID")
+  
+  # Exibe a matriz de correlação para LOC_ID e POS_ID
+  plot_correlation_matrix(inteli_falhas, numeric_cols = c("LOC_ID", "POS_ID"))
+}
+
+
+```
+```{r}
+# 3.1 Transformação de Variáveis Categóricas para Numéricas
+inteli_falhas$LOC_NUM <- as.numeric(as.factor(inteli_falhas$LOC))
+inteli_falhas$PONTO_NUM <- as.numeric(as.factor(inteli_falhas$PONTO))
+
+# 3.2 Calcular a matriz de correlação entre 'LOC_NUM' e 'PONTO_NUM'
+cor_matrix <- cor(inteli_falhas[, c("LOC_NUM", "PONTO_NUM")], use = "complete.obs")
+
+# 3.3 Visualizar a matriz de correlação
+corrplot(cor_matrix, method = "color", type = "upper", tl.cex = 1, addCoef.col = "black")
+
+
+```
+```{r}
+
+# Criando uma tabela de contingência entre 'LOC' e 'PONTO'
+tabela_contingencia <- table(inteli_falhas$PONTO, inteli_falhas$LOC)
+
+# Exibir as 10 combinações mais frequentes
+head(sort(rowSums(tabela_contingencia), decreasing = TRUE), 10)
+# Aplicando o teste Qui-Quadrado
+teste_chi2 <- chisq.test(tabela_contingencia)
+
+teste_chi2
+
+# Transformar a tabela de contingência em um dataframe para ggplot
+df_contingencia <- as.data.frame(as.table(tabela_contingencia))
+
+# Criar heatmap de falhas por PONTO e LOC
+ggplot(df_contingencia, aes(x = Var2, y = Var1, fill = Freq)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "red") +
+  labs(title = "Distribuição de Falhas por Área de Produção e Tipo de Peça",
+       x = "Tipo de Peça (LOC)",
+       y = "Área de Produção (PONTO)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+# 5. Análise Multivariada
+
+Como a maioria das variáveis são categóricas, o PCA tradicional (prcomp()) não funcionará, pois ele é baseado na matriz de covariância que exige variáveis numéricas.
+
+Para contornar isso, utilizaremos MCA (Análise de Correspondência Múltipla), que é uma extensão do PCA para dados categóricos.
+
+```{r}
+library(FactoMineR)  # Para executar o MCA
+library(factoextra)  # Para visualizar os resultados
+library(dplyr)
+library(factoextra)
+```
+```{r}
+# Seleciona as colunas de interesse
+filtered_inteli_falhas <- inteli_falhas %>% 
+  filter(PONTO %in% c("AGUA", "ZP5A"))
+df_falhas <- filtered_inteli_falhas  %>% select(PONTO, LOC)
+
+# (Opcional) Agrupe categorias com baixa frequência para evitar níveis muito esparsos:
+# df_falhas <- agrupar_categorias(df_falhas, "LOC", percentual = 0.01)
+# df_falhas <- agrupar_categorias(df_falhas, "TYPE_TEXT", percentual = 0.01)
+# df_falhas <- agrupar_categorias(df_falhas, "PONTO", percentual = 0.01)
+
+# Convert the selected columns to factors
+df_falhas <- df_falhas %>% mutate(across(everything(), as.factor))
+
+# Create dummy variables for each factor (one-hot encoding) using model.matrix().
+# The "-1" removes the intercept column.
+df_falhas_dummy <- model.matrix(~ . - 1, data = df_falhas)
+
+# Run PCA on the dummy-coded data.
+# Center and scale the data, which is generally recommended.
+pca_falhas <- prcomp(df_falhas_dummy, center = TRUE, scale. = TRUE)
+
+# Visualize the explained variance (scree plot)
+fviz_eig(pca_falhas, addlabels = TRUE, ylim = c(0, 50)) +
+  ggtitle("Scree Plot - PCA inteli_falhas")
+
+# Visualize the individuals (observations) on the first two principal components.
+fviz_pca_ind(pca_falhas,
+             title = "PCA - Distribution of Individuals (inteli_falhas)",
+             label = "none",   # Omit labels for clarity
+             repel = TRUE)
+
+# Visualize the variables (dummy features) in the PCA space.
+fviz_pca_var(pca_falhas,
+             title = "PCA - Contribution of Variables (inteli_falhas)",
+             repel = TRUE)
+```
+# 6. Conclusão e Discussão
+
+cat("## Conclusão e Discussão\n")
+cat("\n### Sumário das Descobertas\n")
+cat("A análise exploratória revelou padrões importantes nos dados de produção da Volkswagen. \n")
+cat("A análise univariada mostrou as distribuições das variáveis categóricas, como 'STATUS' em inteli_status, 'MODELL' em inteli_veiculo e 'PONTO' em inteli_falhas além de identificar possíveis outliers em variáveis numéricas, como 'LOC_ID' em inteli_falhas.\n")
+cat("Na análise bivariada, foram exploradas relações entre variáveis categóricas (por exemplo, entre 'LOC' e 'PONTO') e entre variáveis numéricas (como 'LOC_ID' e 'POS_ID').\n")
+cat("A matriz de correlação ajudou a entender as relações lineares entre as variáveis numéricas.\n")
+cat("\n### Análise Multivariada (PCA)\n")
+cat("A aplicação de PCA utilizando as variáveis numéricas permitiu reduzir a dimensionalidade dos dados e identificar os principais componentes que explicam a variância observada. \n")
+cat("A interpretação dos componentes destacou quais variáveis contribuem de forma significativa para as variações nos dados, oferecendo insights para análises futuras mais focadas.\n")
+cat("\n### Limitações e Possíveis Melhorias\n")
+cat("Embora a análise exploratória tenha fornecido insights valiosos, foram identificadas algumas limitações:\n")
+cat("- A quantidade de variáveis numéricas disponíveis para análises multivariadas é limitada em alguns dos conjuntos de dados.\n")
+cat("- A integração dos diferentes conjuntos de dados (status, resultados, falhas e veículo) pode ser aprimorada para permitir uma análise mais robusta das relações entre os processos e as falhas.\n")
+cat("- Futuras análises poderiam se beneficiar da aplicação de técnicas preditivas e análises de séries temporais para explorar a dinâmica do processo produtivo.\n")
+cat("\n### Recomendações\n")
+cat("Para análises futuras, recomenda-se:\n")
+cat("- Realizar uma integração mais aprofundada entre os diferentes conjuntos de dados.\n")
+cat("- Investigar métodos avançados para detecção de outliers e análise temporal.\n")
+cat("- Reduzir a cardinalidade das variáveis com criação de grupos como outros, ou reduzindo as áreas de falhas as áreas de interesse do stakeholders.\n")
+
+
+
